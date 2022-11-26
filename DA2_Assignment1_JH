@@ -1,0 +1,303 @@
+################################################################################################
+# Data Analysis for Business, Economics, and Policy
+# by Jana Hochel inspired by Gabor BEKES and  Gabor KEZDI 
+###############################################################################################x
+
+# DA2 CHAPTER 10 Assigment 1
+# ------------------------------------------------------------------------------------------------------
+#### SET UP
+
+# CLEAR MEMORY
+rm(list=ls())
+
+# Import libraries 
+library(tidyverse)
+library(arm)
+library(lmtest)
+library(estimatr)
+library(sandwich)
+library(segmented)
+library(stargazer)
+library(cowplot)
+library(huxtable)
+library(janitor)
+library(skimr)
+# ------------------------------------------------------------------------------------------------------
+
+# set working directory
+#setwd("~/")
+getwd()
+source("set-data-directory.R")           
+source("ch00-tech-prep/theme_bg.R")
+source("ch00-tech-prep/da_helper_functions.R")
+options(digits = 3) 
+
+data_in <- paste(data_dir,"cps-earnings","clean/", sep = "/")
+use_case_dir <- "ch10-gender-earnings-understand/"
+
+data_out <- use_case_dir
+output <- paste0(use_case_dir,"output/")
+create_output_if_doesnt_exist(output)
+
+
+#####################################################################
+# Comparing gender pay gap in IT and Finance
+#####################################################################
+# load data
+cps <- read_csv(paste0(data_in,"morg-2014-emp.csv"), 
+                     col_types = cols(.default = "?", 
+                                      state = "c"))
+janitor::tabyl(cps$state)
+
+### Verification what filters may be used for occupation
+is.numeric(cps$occ2012)
+
+### Select subset
+cps <- subset(cps, cps$occ2012>800)
+cps<- subset(cps,cps$occ2012<1240)
+
+# R adding a column to dataframe based on values in other columns:
+cps <- cps %>% 
+  mutate(IT_Occupantion = if_else(cps$occ2012 > 1000, 1, 0))
+
+
+# SELECT OBSERVATIONS
+cps <- cps %>% filter(uhours>=20 & earnwke>0 & age>=24 & age<=64 & grade92>=44)
+glimpse(cps)
+
+# CREATE VARIABLES
+cps <- cps %>% mutate(female=sex==2,
+                      w=earnwke/uhours,
+                      lnw=log(w)
+)
+
+# Data quality control
+skim(cps)
+
+#preview
+head(cps)
+
+### Brief overview
+summary(cps)
+
+### DISTRIBUTION OF EARNINGS
+cps %>% dplyr::select(w, grade92, female, age) %>% summary()
+
+cps %>% dplyr::select(w, grade92, female, age) %>% filter(w>=1) %>% summary()
+
+# Age Distribution 
+
+F10_earnings_hist<- ggplot(data = cps, aes (x = age, y = 2*(..count..)/sum(..count..))) +
+  geom_histogram(binwidth = 4, color = color.outline, fill = color[1], size = 0.25, alpha = 0.8,  
+                 boundary=0, closed='left',  show.legend=F, na.rm =TRUE) +
+  labs(x = "Age (years)", y = "Percent") +
+  facet_wrap(~ifelse(female, "Female", "Male"))+
+  labs(x = "Age (years)",y = "Percent")+
+  scale_x_continuous(limits = c(24,64) , breaks = seq(25, 65, by = 12),) +
+  scale_y_continuous(limits=c(0, 0.16), breaks = seq(0, 0.16, by = 0.02), labels = scales::percent_format(accuracy = 5L)) +
+  theme_bg()
+F10_earnings_hist
+
+# We may see that in the IT and Finance sector we are missing sample of men between 30 and 45.
+
+F10_earnings_density<- ggplot(data = cps, aes(x=age, y = stat(density), color = female)) +
+  geom_density(adjust=1.5, show.legend=F, na.rm =TRUE, size=0.7) +
+  labs(x="Age (years)", y="Density", color = "") +
+  scale_color_manual(name="", 
+                     values=c(color[2],color[1]),
+                     labels=c("Male","Female")) +
+  scale_x_continuous(expand = c(0.01, 0.01), limits = c(24, 64), breaks = seq(25, 65, by = 5)) +
+  scale_y_continuous(expand = c(0.0, 0.0), limits = c(0, 0.04), breaks = seq(0, 0.04, by = 0.01)) +
+  geom_text(aes(x = 55, y = 0.028, label = "Male"), color = color[2], size=2) +
+  geom_text(aes(x = 55, y = 0.020, label = "Female"), color = color[1], size=2) +
+  theme_bg() 
+F10_earnings_density
+save_fig("ch10-figure-1-earnings-density", output, "small")
+
+################################################################
+# Task 1 
+## Show how the gender gap varies with the level of education. 
+## LN EARNINGS, GENDER, AGE
+## robust standard error
+## plain SE
+reg_female<-lm(lnw~female+IT_Occupantion,data=cps) 
+summary(reg_female)
+
+## Robust
+reg_fem <- lm_robust(lnw ~ female+IT_Occupantion , data=cps, se_type = "HC1")
+summary(reg_fem)
+
+hted<-huxreg(reg_female, reg_fem,
+           statistics = c(N = "nobs", R2 = "r.squared")) 
+hted
+
+## We may see that the female tend to earn less. R-squared has weak explanatory power.
+## IT employees seem to earn more than employees in Finance but it seems insignificant.
+
+# This is consistent with the box plots.
+F07_x2<- ggplot(data = cps, aes(x = female, y = w)) +
+  stat_boxplot(aes(group = female), geom = "errorbar", width = 0.25, color = viridis(2, begin=0.3, end=0.7), size = 0.5, na.rm=T)+
+  geom_boxplot(aes(group = female),  color = viridis(2, begin=0.3, end=0.7), fill = viridis(2, begin=0.3, end=0.7), size = 0.5, width = 0.5, alpha = 0.3, na.rm=T, outlier.shape = NA) +
+  geom_jitter(aes(color = female), position=position_jitter(0.1), size = 0.5, show.legend=F,  na.rm=T) +
+  labs(x = "Female",y = "Wage Scale") +
+  scale_y_continuous(expand=c(0.01,0.01),limits = c(0, 100), breaks = seq(0, 100, by=50)) +
+  expand_limits( y = 1) +
+  scale_color_viridis(discrete = TRUE, option = "D", begin=0.3, end=0.7)+
+  theme_bg() 
+F07_x2
+
+# On a scale 0-100, we can see that on average women earn less.
+
+
+################################################################
+
+# Task 2
+## Show how the gender gap varies with the level of education. Consider several options to model the relationship.
+### Select subset
+reg_ed <- lm_robust(lnw ~ female+ age+grade92+IT_Occupantion, data=cps, se_type = "HC1")
+ht<-huxreg(reg_ed,
+           statistics = c(N = "nobs", R2 = "r.squared")) 
+ht
+
+### We may see that both age, education, and gender have a significant relationship with wage. 
+### Nonetheless, R-squared is still low but improved.
+
+## Comparing across genders
+reg_ed_fem <- lm_robust(lnw ~ age+grade92+IT_Occupantion, data=cps %>% filter(female==1), se_type = "HC1")
+reg_ed_male <- lm_robust(lnw ~ age+grade92+IT_Occupantion, data=cps %>% filter(female==0), se_type = "HC1")
+
+ht2<-huxreg(reg_ed_fem, reg_ed_male,
+           statistics = c(N = "nobs", R2 = "r.squared")) 
+ht2
+
+
+# We may see that the premium for working in IT is higher for women compared to finance altough insignificant.
+# As women get older the pay gap becomes larger. Alternatively, historically women did not earn as much and the younger generations is more even.
+# Similarly, educations pays off more for women. The education rate is higher among younger women.
+
+## Comparing across levels of attained education
+reg_ed_MA <- lm_robust(lnw ~ age+IT_Occupantion+female, data=cps %>% filter(grade92==44), se_type = "HC1")
+reg_ed_Profess <- lm_robust(lnw ~ age+IT_Occupantion+female, data=cps %>% filter(grade92==45), se_type = "HC1")
+reg_ed_Phd <- lm_robust(lnw ~ age+IT_Occupantion+female, data=cps %>% filter(grade92==46), se_type = "HC1")
+
+ht3<-huxreg(reg_ed_MA, reg_ed_Profess, reg_ed_Phd,
+            statistics = c(N = "nobs", R2 = "r.squared")) 
+ht3
+
+# There is significant premium for attainment of higher education.
+# According to this, the largest premium for working in IT is among PHD students altough still insignificant.
+# The age matters only for Master-educated professionals, their wage increases with age (significantly),
+
+# comparing for occupation IT vs Finance
+reg_ed_IT <- lm_robust(lnw ~ age+grade92+female, data=cps %>% filter(IT_Occupantion==1), se_type = "HC1")
+reg_ed_FINANCE <- lm_robust(lnw ~ age+grade92+female, data=cps %>% filter(IT_Occupantion==0), se_type = "HC1")
+
+ht4<-huxreg(reg_ed_IT, reg_ed_FINANCE,
+            statistics = c(N = "nobs", R2 = "r.squared")) 
+ht4
+
+# Finance seems to be more traditional industry. Education and age seem to have a bigger (significant)coefficient and women are paid significantly less than in IT.
+
+
+
+
+
+##############################################
+The linear model
+
+cps <- cps %>% mutate(agesq=age**2,
+                      agecu=age**3,
+                      agequ=age**4
+)
+
+
+reg13 <- lm_robust(lnw ~ female + age + age*female, data=cps, se_type = "HC1")
+
+# PREDICTION AND GRAPH LINEAR
+data_m <- cps %>% filter(female==0)
+pred <- predict(reg13, newdata = data_m, se.fit=T)
+data_m <- bind_cols(data_m,as_tibble(pred$fit))
+data_m <- data_m %>% mutate(CIup=value+2*pred$se.fit,
+                            CIlo=value+-2*pred$se.fit 
+)
+
+
+data_f <- cps %>% filter(female==1)
+pred <- predict(reg13, newdata = data_f, se.fit=T)
+data_f <- bind_cols(data_f,as_tibble(pred$fit))
+data_f <- data_f %>% mutate(CIup=value+2*pred$se.fit,
+                            CIlo=value+-2*pred$se.fit 
+)
+
+F10_earnings_interact<- ggplot(data=data_m,aes(x=age,y=value))+
+  geom_line(colour=color[1],linetype=1, lwd=0.8)+
+  geom_line(data=data_m,aes(x=age,y=CIup), colour=color[1], linetype= "dashed", lwd=0.3)+
+  geom_line(data=data_m,aes(x=age,y=CIlo), colour=color[1], linetype= "dashed", lwd=0.3)+
+  geom_line(data=data_f,aes(x=age,y=value),colour=color[2],lwd=0.8)+
+  geom_line(data=data_f,aes(x=age,y=CIup), colour=color[2],  linetype= "dashed", lwd=0.3)+
+  geom_line(data=data_f,aes(x=age,y=CIlo), colour=color[2],  linetype= "dashed", lwd=0.3)+
+  labs(x = "Age (years)",y = "ln(earnings per hour, US dollars)")+
+  scale_x_continuous(expand = c(0.01,0.01), limits = c(24, 65), breaks = seq(25, 65, by = 5)) +
+  scale_y_continuous(expand = c(0.01,0.01), limits = c(2.8, 3.8), breaks = seq(2.8, 3.8, by = 0.1)) +
+  theme_bg() 
+F10_earnings_interact
+
+# The hourly wage of men increases over time (narrow confident interval).
+### Among women this is much more volatile as we can observe wider confidence interval (mostlikely high heteroskedasticity).
+
+##############################################
+The polynomial model
+
+cps <- cps %>% mutate(agesq=age**2,
+                      agecu=age**3,
+                      agequ=age**4
+)
+
+reg16 <- lm_robust(lnw ~ age + agesq + agecu + agequ + female + female*age + female*agesq + female*agecu + female*agequ, data=cps)
+
+# PREDICTION AND GRAPH POLYNOMIAL
+data_m <- cps %>% filter(female==0)
+pred <- predict(reg16, newdata = data_m, se.fit=T)
+data_m <- bind_cols(data_m,as_tibble(pred$fit))
+data_m <- data_m %>% mutate(CIup=value+2*pred$se.fit,
+                            CIlo=value+-2*pred$se.fit 
+)
+
+
+data_f <- cps %>% filter(female==1)
+pred <- predict(reg16, newdata = data_f, se.fit=T)
+data_f <- bind_cols(data_f,as_tibble(pred$fit))
+data_f <- data_f %>% mutate(CIup=value+2*pred$se.fit,
+                            CIlo=value+-2*pred$se.fit 
+)
+
+F10_earnings_interact2<- ggplot(data=data_m,aes(x=age,y=value))+
+  geom_line(colour=color[1],linetype=1, lwd=0.8)+
+  geom_line(data=data_m,aes(x=age,y=CIup), colour=color[1], linetype= "dashed", lwd=0.3)+
+  geom_line(data=data_m,aes(x=age,y=CIlo), colour=color[1], linetype= "dashed", lwd=0.3)+
+  geom_line(data=data_f,aes(x=age,y=value),colour=color[2],lwd=0.8)+
+  geom_line(data=data_f,aes(x=age,y=CIup), colour=color[2],  linetype= "dashed", lwd=0.3)+
+  geom_line(data=data_f,aes(x=age,y=CIlo), colour=color[2],  linetype= "dashed", lwd=0.3)+
+  labs(x = "Age (years)",y = "ln(earnings per hour, US dollars)")+
+  scale_x_continuous(expand = c(0.01,0.01), limits = c(24, 65), breaks = seq(25, 65, by = 5)) +
+  scale_y_continuous(expand = c(0.01,0.01), limits = c(2.8, 3.8), breaks = seq(2.8, 3.8, by = 0.1)) +
+  theme_bg() 
+F10_earnings_interact2
+
+
+# The potential polynomial and linear model are consistent with the previous fiindings that the pay gap increases over time as older women are less educated.
+
+################################################################
+
+
+# Task 3
+## Summarize your findings.
+
+# The pay gap among genders is significant.
+# The factors that largely influence the pay is education and age.
+# The professionals working in IT seem to earn more but the difference compared with finance is insignificant.
+# Women are able to suffer lower pay gap in IT. The same goes for younger and less educated people. IT seems more flexible than finance.
+# Age, Education, Gender, and IT sector have only low explanatory power based on the low R-square.
+# Therefore, we can safely assume that more factors have an impact on wage.
+
+
