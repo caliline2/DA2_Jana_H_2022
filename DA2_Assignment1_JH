@@ -205,6 +205,8 @@ ht4
 ##############################################
 The linear model
 
+# Green stands for female and blue for men
+
 cps <- cps %>% mutate(agesq=age**2,
                       agecu=age**3,
                       agequ=age**4
