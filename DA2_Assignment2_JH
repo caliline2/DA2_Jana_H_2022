@@ -1,0 +1,326 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Homework 4
+#Use the hotels-prague dataset. Create and compare different models.
+```{r include=FALSE}
+#```{r echo = FALSE}
+# Clear memory
+rm(list=ls())
+
+# Packages to use
+library(tidyverse)
+library(modelsummary)
+library(knitr)
+
+# Estimate piecewise linear splines
+library(lspline)
+library(fixest)
+# For scaling ggplots
+require(scales)
+
+library(lmtest)
+library(olsrr)
+library("corrplot")
+library(kableExtra)
+library(stargazer)
+#library(marginaleffects)
+library(margins)
+library(marginaleffects)
+library(marg)
+
+# Call the data from github
+
+#my_url <- 'https://osf.io/g5dmw/download'
+#df     <- read_csv(my_url)
+features<-'https://osf.io/utwjs/download'
+features <- read_csv(features)
+features
+
+prices <- 'https://osf.io/p6tyr/download'
+prices<- read_csv(prices)
+prices
+
+#### Left Join using merge function
+df = merge(x=prices,y=features,by="hotel_id")
+df
+
+# R adding a column to dataframe based on values in other columns:
+df <- df %>% 
+  mutate(highly_rated= if_else(rating >= 4, 1, 0))
+  
+df
+
+df <- df %>% 
+  mutate(price_night= price/nnights)
+  
+df
+
+df <- subset(df, city=="Prague")
+df
+
+####
+# 
+# Good-to-know: Quick check on all HISTOGRAMS
+
+df<-df[is.finite(df$distance),]
+df<-df[is.finite(df$price_night),]
+df<-df[is.finite(df$rating),]
+df<-df[complete.cases(df[,c("rating","distance","price_night")]),]
+
+
+
+```
+
+## Descriptive statistics
+```{r echo = TRUE}
+
+df %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales = 'free') +
+  geom_histogram(bins=20)+
+  theme_bw()
+
+``` 
+
+```{r echo = TRUE}
+df$price<-as.numeric(df$price)
+df$distance<-as.numeric(df$distance)
+df$rating<-as.numeric(df$rating)
+df$weekend<-as.numeric(df$weekend)
+df$holiday<-as.numeric(df$holiday)
+df$year<-as.numeric(df$year)
+
+```
+
+```{r include=TRUE}
+datasummary_skim(df)
+
+```
+
+#In terms of cleaning, the inf and NULL values were dropped.
+
+\newpage
+
+# Multicollinearity
+
+```{r include=TRUE}
+lessismore <-df[, c('price_night', 'rating', 'distance','weekend','holiday', 'year')]
+
+model <- lm(price_night~rating+weekend+holiday+year+distance, data = lessismore)
+model
+
+ols_vif_tol(model)
+
+```
+
+#Multicollinearity is not an big issue here as VIF is only 1 which is approximately also the tolerable level.
+
+
+```{r include=TRUE}
+
+ols_eigen_cindex(model)
+corrplot(cor(lessismore), method = "number")  
+
+
+```
+#We may see that hotels further way from the city are rated worse which has impact not only on ratings but also price. Moreover, there is an overlap between holiday and weekend.
+
+\newpage
+
+#Marginal effects package marginal effects function instead of logitmfx
+
+# Average marginal effects using margins library:
+```{r include=TRUE}
+margins1 <- lm(price_night ~rating * distance + holiday+weekend+year, data = df)
+(marg1 <- margins(margins1))
+
+```
+# Marginal effects using marginaleffect library:
+
+#Marginal effects measure the impact that an instantaneous unit change in one variable has on the outcome variable while all other variables are held constant.
+
+```{r include=TRUE}
+
+library(marg)
+marginaleffect1 <- lm(price_night ~rating + distance + holiday+weekend+year, data = df)
+marginaleffect1
+
+marginaleffect2 <- lm(price_night ~rating + distance, data = df)
+marginaleffect2
+
+
+
+```
+#The results are consistent with our previous findings. Distance has a negative impact on the price. There is relationship between rating and distance. Other variables have a positive impact on the price. The effect of rating on price seem to have different effect based on our results depending which variables we hold constant.
+
+# Predictions
+```{r include=TRUE}
+#Predicting effect of days on price
+predictions1<-predictions(marginaleffect1) |> head()
+predictions1
+
+
+# Compare coefficients, marginal differences, and predicted probabilities, and discuss your results.
+
+
+predictnow <- glm(price_night ~rating + distance + holiday+weekend+year, data=lessismore)
+predict1<-predict(predictnow, lessismore, type="response")
+
+
+
+
+```
+#The p-value is low which suggests good probability but the confidence interval is quite wide which opens room for uncertainty.
+
+# The models
+## 1st Model- Linear Regression (level-level)
+
+
+```{r include=FALSE}
+reg_lvl_lvl<-lm(lessismore$price_night~lessismore$rating+lessismore$weekend+lessismore$holiday+lessismore$year+lessismore$distance,data=lessismore) 
+```
+
+
+```{r include=TRUE}
+summary(reg_lvl_lvl)
+
+```
+
+## 2nd Model log-level
+
+```{r include=FALSE}
+lessismore <- lessismore %>% mutate(ln_price_night = log(price_night),
+                    ln_rating = log(rating),
+                    ln_distance = log(lessismore$distance))
+lessismore <- subset(lessismore, ln_distance>=0)
+
+
+reg_lvl_log_price_night<-lm(ln_price_night~ rating +lessismore$weekend+lessismore$holiday+lessismore$year+distance,data=lessismore) 
+```
+
+```{r include=TRUE}
+summary(reg_lvl_log_price_night)
+```
+
+## 3rd Model level-log
+```{r include=FALSE}
+
+reg_lvl_log_stars<-lm(price_night~ln_rating +lessismore$weekend+lessismore$holiday+lessismore$year+distance,data=lessismore) 
+
+
+reg_lvl_log_distance<-lm(price_night~rating +lessismore$weekend+lessismore$holiday+lessismore$year+ln_distance,data=lessismore) 
+
+
+reg_lvl_log_both<-lm(price_night~ln_rating +lessismore$weekend+lessismore$holiday+lessismore$year+ln_distance,data=lessismore) 
+
+```
+
+```{r include=TRUE}
+summary(reg_lvl_log_distance)
+summary(reg_lvl_log_stars)
+summary(reg_lvl_log_both)
+```
+
+## 4th Model log-log
+```{r include=FALSE}
+reg_log_log<-lm(ln_price_night~ ln_rating+lessismore$weekend+lessismore$holiday+lessismore$year+ln_distance,data=lessismore) 
+```
+
+```{r include=TRUE}
+summary(reg_log_log)
+```
+
+
+## Polinomials of distance with square and cube terms
+
+```{r include=FALSE}
+lessismore <- lessismore %>% mutate(ln_distance_sq = ln_distance^2,
+                     ln_distance_cb  = ln_distance^3)
+# Do the regressions
+# Using `feols' with classical standard errors
+
+reg_sq <- feols(price_night ~ ln_distance_sq+weekend+holiday+year+rating, data = lessismore)
+```
+
+```{r include=FALSE}
+reg_sq
+```
+
+
+```{r include=FALSE}
+reg_cb <- feols(price_night ~ ln_distance_cb+weekend+holiday+year +rating, data = lessismore)
+```
+
+
+```{r include=FALSE}
+reg_cb
+
+```
+
+
+# Models:
+
+```{r include=TRUE}
+regsq <- feols(price_night ~ ln_distance_sq+weekend+holiday+year +rating, data = lessismore, vcov = 'hetero')
+regsq
+
+regcb <- feols(price_night ~ ln_distance_cb+weekend+holiday+year +rating, data = lessismore, vcov = 'hetero')
+regcb
+
+regln_lvl <- feols(ln_price_night ~ distance+weekend+holiday+year+rating, data = lessismore, vcov = 'hetero')
+regln_lvl
+
+reglvl_ln <- feols(price_night ~ ln_distance+weekend+holiday+year+ln_rating, data = lessismore, vcov = 'hetero')
+reglvl_ln
+
+```
+
+
+
+# Piecewise-linear-spline model, with a cutoff at 2 miles
+
+```{r include=FALSE}
+
+## Piecewise-linear-spline model, with a cutoff at 2 miles
+
+# Regression with piecewise linear spline:
+# 1st define the cutoff for gdp per capita
+cutoff <- 2
+# 2nd take care of log transformation -> cutoff needs to be transformed as well
+
+cutoff_ln <- log(cutoff)
+# Use simple regression with the lspline function
+?lspline
+reg_spline <- feols(ln_price_night ~ lspline(distance, cutoff_ln), data = lessismore, vcov = 'hetero')
+```
+
+```{r include=TRUE}
+reg_spline
+```
+
+```{r include=TRUE}
+ggplot(data = lessismore, aes(x = distance, y = ln_price_night)) +
+  geom_point(color='blue') +
+  geom_smooth(formula = y ~ lspline(x,cutoff_ln), method = lm, color = 'red') +
+  theme_bw()
+```
+
+
+\newpage
+# Compare these models with etable()
+```{r include=TRUE}
+etable(regln_lvl,regcb,regsq)
+#kableExtra::kable(etable(regln_lvl,reglvl_ln,regcb,regsq, reg_spline))
+```
+
+
+```
+
+
+#All the models perform poorly. Heteroskedasticity is present. Luckily, multicolinearity is not an issues. I would use log price_night and the rest keep as it is as the R-square has become smaller for all the other models.Most hotels are not far away from the city and thus, we cannot full appreciate the impact of distance from the city center on price_night. The distance certainly has a negative impact on price. The coefficient is roughly 12 EUR discount each mile further away from the city center (based on linear model but the log model suggests less). The effect of star rating is uncertain in Prague as it seems to differ based on point of view. 
