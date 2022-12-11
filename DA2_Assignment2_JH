@@ -31,6 +31,9 @@ library(stargazer)
 library(margins)
 library(marginaleffects)
 library(marg)
+library(aod)
+
+#install.packages('aod')
 
 # Call the data from github
 
@@ -41,7 +44,7 @@ features <- read_csv(features)
 features
 
 prices <- 'https://osf.io/p6tyr/download'
-prices<- read_csv(prices)
+prices <- read_csv(prices)
 prices
 
 #### Left Join using merge function
@@ -310,8 +313,45 @@ ggplot(data = lessismore, aes(x = distance, y = ln_price_night)) +
   geom_smooth(formula = y ~ lspline(x,cutoff_ln), method = lm, color = 'red') +
   theme_bw()
 ```
+\newpage
+
+# Non-parametric models
+
+## Logit
+
+```{r include=TRUE}
+lessismore$price_night <- factor(lessismore$price_night)
+mylogit <- glm(price_night ~ distance+weekend+holiday+year+rating, data = lessismore, family = "binomial")
+summary(mylogit)
 
 
+## Chi-squared test:
+wald.test(b = coef(mylogit), Sigma = vcov(mylogit), Terms = 4:6)
+
+```
+\newpage
+
+## Probit
+```{r include=TRUE}
+
+myprobit <- glm(price_night ~ distance+weekend+holiday+year+rating, family = binomial(link = "probit"), 
+    data = lessismore)
+
+## model summary
+summary(myprobit)
+
+## Chi-squared test:
+wald.test(b = coef(myprobit), Sigma = vcov(myprobit), Terms = 4:6)
+
+
+```
+
+#None of the p-values seem to be significant as they are large and there are no stars that would indicate their significance.
+
+
+##If your chi-square calculated value is greater than the chi-square critical value, then you reject your null hypothesis. We can reject the null hypothesis according to Chi test.
+
+#We cannot reject the null hypothesis as our Z is in both cases small
 \newpage
 # Compare these models with etable()
 ```{r include=TRUE}
@@ -323,4 +363,4 @@ etable(regln_lvl,regcb,regsq)
 ```
 
 
-#All the models perform poorly. Heteroskedasticity is present. Luckily, multicolinearity is not an issues. I would use log price_night and the rest keep as it is as the R-square has become smaller for all the other models.Most hotels are not far away from the city and thus, we cannot full appreciate the impact of distance from the city center on price_night. The distance certainly has a negative impact on price. The coefficient is roughly 12 EUR discount each mile further away from the city center (based on linear model but the log model suggests less). The effect of star rating is uncertain in Prague as it seems to differ based on point of view. 
+#All the models perform poorly. Heteroskedasticity is present. Luckily, multicolinearity is not an issues. I would use log price_night and the rest keep as it is as the R-square has become smaller for all the other models.Most hotels are not far away from the city and thus, we cannot full appreciate the impact of distance from the city center on price_night. The distance certainly has a negative impact on price. The coefficient is roughly 13 EUR discount each mile further away from the city center (based on linear model but the log model suggests less). The prices have increased in the later years. The coefficient is positive also for holidays and weekends. The effect of star rating is uncertain in Prague as it seems to differ based on point of view(many models suggest the impact is negative but it may be because the better hotels are fully booked also over the week when the prices are cheaper). 
