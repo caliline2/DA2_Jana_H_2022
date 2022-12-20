@@ -1,0 +1,583 @@
+---
+title: "DA2 Project Jana Hochel"
+author: "Jana Hochel"
+date: "2022-12-15"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+
+# Load Libraries
+## Clear memory
+rm(list=ls())
+
+## Packages to use
+library(tidyverse)
+library(modelsummary)
+library(knitr)
+library(ggplot2)
+
+## Estimate piecewise linear splines
+library(lspline)
+library(fixest)
+## For scaling ggplots
+require(scales)
+
+library(lmtest)
+library(olsrr)
+library("corrplot")
+library(kableExtra)
+library(stargazer)
+library(readr)
+library(lme4)  # for mixed models
+library(emmeans)  # for marginal effects
+library(effects)  # for predicted marginal means
+library(knitr)
+# Call the data from github
+
+data1<-'https://raw.githubusercontent.com/caliline2/DA2_Jana_H_2022/main/DA2Project.csv'
+data1<-read.csv(data1)
+data1
+
+# Decriptive Statistics
+
+data1 %>%
+  keep(is.numeric) %>% 
+  gather() %>% 
+  ggplot(aes(value)) +
+  facet_wrap(~key, scales = 'free') +
+  geom_histogram(bins=20)+
+  theme_bw()
+ 
+ls(data1)
+
+kableExtra::kable(sapply(data1, class))
+
+datasummary_skim(data1)
+
+
+
+# We can also compare that the levels of pollutions vary largely across countries.
+
+
+
+
+# Data Wrangling## convert country and year to a factor
+data1 <- data1 %>%
+      mutate(Country = factor(Country))
+      
+data1 <- data1 %>%
+      mutate(Year = factor(Year))
+      
+
+## Add Percentage of energy mix to ignore the size of the country
+data1 <- data1 %>%
+  mutate(
+  OilPercent =  Oil/EnergyConsExajoules,
+  GasPercent = Natural.Gas/EnergyConsExajoules,
+  CoalPercent = Coal/EnergyConsExajoules,
+  NuclearPercent = Nuclear.energy/EnergyConsExajoules,
+  HydroPercent = Hydro.electric/EnergyConsExajoules,
+  RenewPercent = Renewables/EnergyConsExajoules)
+
+## Group Fosil Fuels
+data1 <- data1 %>%
+  mutate(
+  FosilFuels = OilPercent + GasPercent +  CoalPercent,
+  Nuclear_Renewable = NuclearPercent + HydroPercent + RenewPercent)
+
+## Preparing data for logit and probit regression - Polluted is larger than mean = 1
+data1 <- data1 %>% 
+mutate(BinaryPolluted = factor(if_else(Air.Pollution>"21","1","0")))
+data1
+```
+# 1. Introduction
+
+The prices of energy are going over the roof due to the War in Ukraine and cyclicality. Countries around the world are implementing last-minute desperate solutions - phasing out gas whilst trying to quickly find alternative sources of energy such as burning carbon, biomass, and acquiring overpriced renewables, due to a pressingly high demand. Germany and several other countries have started to phase out nuclear after Fukushima accident which makes the diversification of energy sources even more challenging. A topic that is often overlooked is the footprint of such decisions. This may be measured as Carbon Emissions and Air Pollution.This report analyses the impact of energy mix on air pollution during prior years 2020 and 2021. Once published, this report aims to integrate the 2022 data to see the shift over time. This is particularly interesting as carbon emissions and air pollution decreased due to COVID-19 restrictions in 2020.
+
+# 2. Data: 
+
+## Present the dataset, describe key features
+
+I have managed to collect full data for 59 countries for 2 years - 2020 and 2021.
+
+### Air Pollution
+IQAir is a Swiss company that develops air quality monitoring and cleaning products. They created a list of 117 countries assessing whether they meet WHO guidelines. In 2021, only 3 countries in the world met the WHO Air Quality guidelines. The index that they developed is from 0-100. Countries that have max. 5 points meet guidelines countries that have 100 points pollute more than tenfold the guidelines >50µg/m3 of pollutants. 
+
+Data Source: IQ Air 2022 https://www.iqair.com/world-most-polluted-countries
+
+### Energy Mix
+
+BP collected an impressive dataset tracking the energy consumption by type for almost 100 countries. The consumption is captured as exajoules per year per each type of energy per country - Oil, Natural Gas, Coal, Nuclear energy, Hydro electric, and Renewables. I have further converted it to % of Grant Total to be able to better compare small and large countries. Alternatively, BP data set also works with consumption per capita. 
+
+The dataset also includes the production of Oil and CO2 emissions measured in million tonnes. This has been added to the dataset as well.
+
+Data Source: BP 2022
+https://www.bp.com/en/global/corporate/energy-economics/statistical-review-of-world-energy/country-and-regional-insights.html
+
+### Humand Development Index
+The HDI is measure of prosperity and achievement of a country. It is a geometric mean of education, life expectancy, and GNI per capita, It is an index from 0-1, high HDI is above 0.8 and low is below 0.55
+
+Data Source:United Nations 2022 https://hdr.undp.org/data-center/documentation-and-downloads
+
+
+### Urbanisation
+
+Percentage of population that lives in urban area. Max. 100% and min 0%.
+Data Source: Worldbank 2022
+https://data.worldbank.org/indicator/SP.URB.TOTL.IN.ZS?name_desc=false
+
+### Data Limitations
+Data are usually unavailable for developing countries. Thus, only 1 country has low HDI. This is an important limitations when it comes to external validity. Some data were missing, I have used data available from the internet e.g. ourworldindata to fill in the gaps e.g. Taiwanese UN data.
+
+# Model
+
+# 3. Model:
+### (a) Present the model
+Argue for your model choice. 
+
+First, I have displayed the relatioships of the independent-dependent variables to better understand the shapes and functions that would fit well.
+
+Second, I have tested several models - linear regression, level-log, log-level, and log-log to generate coefficients and find the best fit that would capture variance.
+
+Third, I have created a factor variable from Air.Pollution and used it for the logit, and probit regression to see what factors cause pollution from the binary perspective (Polluted Y/N).
+
+### (b) Discuss your variables
+& process of feature engineering.
+
+Year and country was changed to a factor. The rest of the variables were used in the original numerical form either as an absolute value (Oil Production in Tonnes), percentage (Renewables as % of Energy Consumption), or index (Air Pollution). I have also created a binary variable "Binary Variable", countries that have higher pollution than mean are marked 1 which stands for "Polluted" and 0 which stands for "Clean".
+
+
+### (c) Show core results. 
+#Interpret precisely what you got.
+
+## Basic Linear regression 
+First I have conducted a basic linear regression using the original variables (not the aggregate). The R-squared was ~0.6 which means it is able to capture some variance and it is solid but not a perfect fit.
+
+```{r include=FALSE}
+model <- lm(data1$Air.Pollution~Year + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+FosilFuels
+, data = data1)
+```
+
+```{r include=TRUE, echo=FALSE}
+model%>%
+  tidy() %>%
+  kable()
+
+```
+The intercept is about 100 (conf. interval 67-118 see appendix).
+This is a point where Year is 2020, Total CO2 Emissions are 0, % of Urban Population is zero %, the country Human Development Index is 0, Oil production is 0 tonnes, and Fossil Fuels account for 0 % of Energy Consumption.
+
+The Air Pollution is measured as mixed Index 0-100 points. 0=No air pollution.
+The Coefficient for year 2021 is + 1 index points compared to 2020. Total CO2 Emissions is 0.001 per each Million Tonnes of CO2. If the country was fully urban (Urbanisation = 100%) then the coefficient is -8.035 index points. Energy Consumption Per capita's coefficient is +0.033 per each Gigajoule of consumed energy per person per annum. If the country was completely developed (HDI=1) then the Air pollution would be ~ 100 points lower. Oil Production's correlation is +0.005 for each Million tonnes produced in the country per year. If the country used only Fosil Fuels to cover their energy consumption (Fosil Fuels = 100%) then Air Pollution is expected to be +17.6 index points higher.
+
+The direction of the coefficient (negative/positive)  remained same across different models. The only thing that differed was the magnitude and R-square.
+
+## Linear regression - Fosil Fuels
+Then I have tested the same but using extracted cumulative variable fosil fuels merging Coal, Gas, and Oil together. The R-square (~0.6) and coefficients were almost the same. Thus, we can simplify the model using only aggregate Fossil Fuels % of energy consumption as they display similar patterns. The intercept, Energy Consumption per Capita Human Development Index, and Use of Fosil Fuels effect is significant based on P-value.
+
+### Linear Regression - Interaction
+The third step was testing the effect of the interaction. When adding interaction of all the variables, the R-squared reached ~0.8. Therefore, it is a very good fit as under certain circustamces the effect of some variable may be very different than under other circumstances. Perhaps we can improve it even further by adding Country Factor.
+
+### Linear Regression - Adding Country Factor
+The R-square here is 0.984 but it is because it captures all the idiosyncratic reasons for Air Pollution - Country specific that may hide some other variables that were disregarded earlier. This way we can only point out to a direction whether country is overperforming or underperforming in Air Pollution comparing to other countries but it would not be an explanation why.
+
+### Log-Level
+In this model, Air.Pollution was changed to a logarithm. This way the model worked with percentage change. It displayed the best R-squared ~ 0.7 whilst not having to accomodate for all the countries and interaction. To this model, I have fitted also countries and interaction which yielded R-square of ~0.982.
+
+### Level-Log
+During the investigation of functional form, we might have noticed that % of Fosil Fuels of Total Energy consumptions seem to have a logarithmic pattern. Thus, % of Fosil Fuels was changed to a logarithm. This model did not display higher R-squared than Log-Level.
+
+### Logit & Probit
+
+According to these models, only Energy Consumption per Capita and Oil Production is statistically significant when it comes to determining whether Air in a Country will be polluted. This is surprising based on previous observations that suggested that the Air Pollution is index is significantly related with Energy Consumption per Capita, Human Development Index, and Use of Fosil Fuels.
+
+
+## 4. Generalization and external validity (robustness check)
+
+### (a) Show some robustness / alternative models.
+The R-square is high across the models and has good explanatory power. It may be expected that there is indeed a relationship/correlation between selected variables and Air Pollution in these countries. Nonetheless, we can, see that countries still have a strong idiosynctratic effect that current variables cannot explain. As discussed earlier, external validity may not apply to developing countries that were not captured in our dataset. 
+
+5. Causal interpretation / main summary
+
+(a) Summarize your findings. Discuss room for a causal interpretation.
+
+The energy consumption per capita is not so much an important factor. This paper shows that it is rather the energy mix than the consumption itself.
+Moreover, in developed countries and urbanised countries, the air pollution tend to be lower. This may not be caused by development but also due to the higher likelihood of diversifying energy mix away from the fossil fuels.
+
+6. Conclusion
+(a) Conclude and make business / policy comments/recommendations
+The recommendation would be to support rural less developed countries to diversify the energy sources but also to focus on other idiosyncratic risks such as manufacturing. The next steps will be to use these findings to add data for 2022 and 2023 to see whether developed countries will still manage to retain their favourable position taking into consideration that many of them face challenges with supply of Russian Gas which may lead to increased use of coal and biomass. Biomass and wood consumption was not captured here and this may be another variable that may explain the pollution in rural areas. 
+
+# Appendix 
+
+## Correlation
+
+```{r include=FALSE}
+data2 = subset(data1, select = c(3,12, 13,14,15,16,17,18,19,20,21) )
+ls(data2)
+
+```
+
+```{r include=TRUE, echo=FALSE}
+corrplot(cor(data2), method = "number",addCoef.col = 1,number.cex = 0.75,  title = "Correlation Matrix")
+```
+
+We may see that Carbon Emissions and Air Pollution are only slightly positively correlated as Air Pollution consists of many more variables.
+
+We can see that only Urbanisation has a negative correlation with Air Pollution. Similarly, usage of Nuclear, Hydroelectric and other Renewable energy seem to have very low positive correlation in other words.
+
+Similarly, production of oil is positively correlated with the use of oil and natural gas.
+
+There is correlation between Urbanisation and Human Development Index. Countries with higher urbanisation and higher HDI tend to use less coal and gas whilst also experiencing less air pollution. Based on these findings, we may drop some variables later. 
+
+Based on this observations I have decided to merge the energy mix by type.
+
+#### Let's see whether these relationships are significant and what is the Beta coefficient of energy mix on air pollution.
+
+\newpage
+
+## Multicollinearity
+Analysing only the original data (not the aggregate)
+```{r include=FALSE, echo=FALSE}
+model <- lm(data1$Air.Pollution~Year + Total.CO2.emission + Urban.Population + HDI + Oil.Production +EnergyConsPCGigajoule+ FosilFuels, data = data1)
+
+#```{r include=TRUE}
+options(digits=2)
+options(scipen=999, digits=3)
+```
+
+```{r include=TRUE, echo=FALSE}
+kableExtra::kable(ols_vif_tol(model))
+```
+
+
+
+# 3. Model:
+## (a) Present the model
+& argue for your model choice
+
+### Functional form investigations
+
+```{r include=TRUE, echo=FALSE}
+ggplot(data = data1, aes(x=Air.Pollution, y=EnergyConsPCGigajoule
+)) +
+  geom_point(size=1,  shape=20, stroke=1, fill="black", color="black") +
+  geom_smooth(method="lm",formula=y~poly(x,6), se=F, colour="red", size=1, span=0.9) +  labs(x = "Air.Pollution",y = "Energy Consumption per Capita in Gigajoule") +
+  theme_bw() +
+  scale_x_continuous(limits = c(0,100))
+```
+
+```{r include=TRUE, echo=FALSE}
+  ggplot(data = data1, aes(x=Air.Pollution, y=FosilFuels)) +
+  geom_point(size=1,  shape=20, stroke=1, fill="black", color="black") +
+  geom_smooth(method="loess", se=F, colour="red", size=1, span=0.9) +  labs(x = "Air.Pollution",y = "Fosil Fuels as % of Total Energy Consumption") +
+  theme_bw() +
+  scale_x_continuous(limits = c(0,100))
+  
+```
+
+```{r include=TRUE, echo=FALSE}
+  ggplot(data = data1, aes(x=Air.Pollution, y=HDI)) +
+  geom_point(size=1,  shape=20, stroke=1, fill="black", color="black") +
+  geom_smooth(method="lm", formula=y~poly(x,2), se=F, colour="red", size=1, span=0.9) +  labs(x = "Air.Pollution",y = "Human Development Index") +
+  theme_bw() +
+  scale_x_continuous(limits = c(0,100))
+```
+
+```{r include=TRUE, echo=FALSE}
+ 
+  ggplot(data = data1, aes(x=Air.Pollution, y=Urban.Population)) +
+  geom_point(size=1,  shape=20, stroke=1, fill="black", color="black") +
+  geom_smooth(method="lm", formula=y~poly(x,4), se=F, colour="red", size=1, span=0.9) +  labs(x = "Air.Pollution",y = "Urban Population") +
+  theme_bw() +
+  scale_x_continuous(limits = c(0,100))
+```
+
+
+```{r include=TRUE, echo=FALSE}
+## boxplot
+ggplot(data=data1, aes(x=Year, y=Air.Pollution)) + geom_boxplot(aes(x= Year))
+```
+
+## Box Plots Overview of Data Set
+
+The Air Pollution seems to have increased since 2020. This may be the effect of COVID-19 lockdowns when the emissions decreased due to restrictions on local and international transport, productions, and trade.
+
+```{r include=TRUE, echo=FALSE}
+ggplot(data=data1, aes(x=Air.Pollution, y=Country)) + geom_boxplot(aes(group=Country))
+```
+Air Pollution is diverse across countries.
+
+```{r include=TRUE, echo=FALSE} 
+
+model <- lm(data1$Air.Pollution~Year + Total.CO2.emission + Urban.Population + Oil.Production + OilPercent + GasPercent + CoalPercent + NuclearPercent + HydroPercent +RenewPercent, data = data1)
+```
+
+# The Models
+
+## Basic Linear regression 
+
+analysing only the original data (not the aggregate)
+
+```{r include=TRUE, echo=FALSE}
+summary(model)%>%
+  tidy() %>%
+  kable()
+```
+
+
+The R-squared is ~0.6 which means it is able to explain variance fairly well.
+
+## Linear regression - Fosil Fuels
+
+Testing aggregate fossil fuels variable. The R-squared and coefficients remained almost the same. Thus, we can simplify the model using only aggregate Fossil Fuels % of energy consumption.
+
+```{r include=FALSE, echo=FALSE}
+model_FF <- lm(data1$Air.Pollution~Year + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+FosilFuels
+, data = data1)
+
+```
+
+```{r include=TRUE, echo=FALSE}
+summary(model_FF)%>%
+  tidy() %>%
+  kable()
+"Adjusted R²= " 
+kable(summary(model)$adj.r.squared)
+"R²=" 
+kable(summary(model)$r.squared)
+```
+
+```{r include=TRUE, echo=FALSE}
+#str(model_FF)
+
+anova(model_FF)%>%
+  tidy() %>%
+  kable()
+
+```
+
+```{r include=TRUE, echo=FALSE}
+kable(confint(model_FF))
+
+```
+
+
+```{r include=FALSE, echo=FALSE}
+
+# split plotting area into 2 x 2 grid
+par(mfrow = c(2, 2))
+
+```
+
+```{r include=TRUE, echo=TRUE}
+# plot model diagnostics
+plot(model_FF)
+```
+
+
+## Linear Regression Interaction Model
+
+```{r include=TRUE, echo=FALSE}
+Interaction_Model <- lm(Air.Pollution~Year* Total.CO2.emission*Oil.Production*Urban.Population*EnergyConsPCGigajoule*FosilFuels, data = data1) 
+
+# show the regression coefficients table
+  summary(Interaction_Model)%>%
+  tidy() %>%
+  kable()
+```
+  
+```{r include=TRUE, echo=FALSE}
+"Adjusted R²= " 
+summary(Interaction_Model)$adj.r.squared
+"R²=" 
+summary(Interaction_Model)$r.squared
+
+```
+
+When taking into consideration the intercation between variables the R-squared reached ~0.8. Therefore, it is a very good fit. Perhaps we can improve it even further by adding Country Factor.
+
+
+
+## Linear Regression - Country Factor
+
+```{r include=FALSE, echo=FALSE}
+# examine factor levels
+#levels(data1$Country)
+
+Country_model <- lm(data1$Air.Pollution~Year + Country + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+FosilFuels
+, data = data1) 
+
+# show the results
+```
+
+```{r include=TRUE, echo=FALSE}
+summary(Country_model)%>%
+  tidy() %>%
+  kable()
+  
+"Adjusted R²= " 
+kable(summary(Country_model)$adj.r.squared)
+"R²=" 
+kable(summary(Country_model)$r.squared)
+
+```
+
+
+The R-square here is 0.984 but it is because it captures idiosyncratic reasons for Air Pollution - Country specific that may hide some other variables that were disregarded earlier. 
+
+## Log - level
+This we obtain by calculating a logatirithm of Air Pollution and the plotting it into regression model.
+
+```{r include=FALSE}
+data1 <- data1 %>% mutate(ln_AP = log(Air.Pollution))
+model_loglvl <- lm(data1$ln_AP~Year + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+FosilFuels
+, data = data1)
+```
+
+```{r include=TRUE}
+summary(model_loglvl)%>%
+  tidy() %>%
+  kable()
+
+"Adjusted R²= " 
+kable(summary(model_loglvl)$adj.r.squared)
+"R²=" 
+kable(summary(model_loglvl)$r.squared)
+```
+
+
+## Level - Log
+
+During the investigation of functional form, we might have noticed that % of Fosil Fuels of Total Energy consumptions seem to have a logarithmic pattern. Thus, we set it tp
+
+```{r include=FALSE}
+data1 <- data1 %>% mutate(ln_FF = log(FosilFuels))
+model_lvllog <- lm(data1$Air.Pollution~Year + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+ln_FF
+, data = data1)
+```
+
+```{r include=TRUE}
+summary(model_lvllog)%>%
+  tidy() %>%
+  kable()
+
+"Adjusted R²= " 
+kable(summary(model_lvllog)$adj.r.squared)
+"R²=" 
+kable(summary(model_lvllog)$r.squared)
+```
+
+## Log-Log
+
+```{r include=FALSE}
+model_loglog <- lm(data1$ln_AP~Year + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+ln_FF
+, data = data1)
+```
+
+```{r include=TRUE}
+summary(model_loglog)%>%
+  tidy() %>%
+  kable()
+
+"Adjusted R²= " 
+kable(summary(model_loglog)$adj.r.squared)
+"R²=" 
+kable(summary(model_loglog)$r.squared)
+```
+
+Best seems to perform Log level. Thus, we can test it also for other alternatives.
+
+## Log-Level Interaction Model
+
+```{r include=TRUE, echo=FALSE}
+Interaction_Model <- lm(ln_AP~Year* Total.CO2.emission*Oil.Production*Urban.Population*EnergyConsPCGigajoule*FosilFuels, data = data1) 
+
+# show the regression coefficients table
+  summary(Interaction_Model)%>%
+  tidy() %>%
+  kable()
+  
+"Adjusted R²= " 
+kable(summary(Interaction_Model)$adj.r.squared)
+"R²=" 
+kable(summary(Interaction_Model)$r.squared)
+
+```
+
+When taking into consideration the intercation between variables the R-squared reached ~0.8. Therefore, it is a very good fit. Perhaps we can improve it even further by adding Country Factor.
+
+
+
+## Log Level - Country Factor
+
+```{r include=FALSE, echo=FALSE}
+# examine factor levels
+#levels(data1$Country)
+
+Country_model <- lm(data1$ln_AP~Year + Country + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+FosilFuels
+, data = data1) 
+
+```
+
+
+```{r include=TRUE, echo=FALSE}
+"Adjusted R²= " 
+kable(summary(Country_model)$adj.r.squared)
+"R²=" 
+kable(summary(Country_model)$r.squared)
+```
+
+
+```{r include=TRUE, echo=FALSE}
+summary(Country_model)%>%
+  tidy() %>%
+  kable()
+```
+
+```{r include=FALSE, echo=FALSE}
+
+# split plotting area into 2 x 2 grid
+par(mfrow = c(2, 2))
+
+```
+
+```{r include=TRUE, echo=TRUE}
+# plot model diagnostics
+plot(Country_model)
+```
+
+\newpage
+
+## Logit
+
+```{r include=TRUE}
+data1 <- data1 %>%
+      mutate(Pollution = factor(BinaryPolluted))
+#data1 = as.matrix(data1)
+mylogit <- glm(Pollution~Year+ Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+FosilFuels, data = data1, family = "binomial")
+
+summary(mylogit)
+
+  
+
+```
+
+\newpage
+
+## Probit
+
+```{r include=TRUE}
+
+myprobit <- glm(Pollution~Year + Total.CO2.emission + Urban.Population +EnergyConsPCGigajoule +HDI+Oil.Production+FosilFuels, family = binomial(link = "probit"), 
+    data = data1)
+    
+## model summary
+summary(myprobit)
+
+```
+
